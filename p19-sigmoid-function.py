@@ -7,9 +7,15 @@ nnfs.init()
 # Dense layer
 class Layer_Dense:
 
-    def __init__(self, n_inputs, n_neurons):
+    def __init__(self, n_inputs, n_neurons,
+                 weight_regularizer_l1=0, weight_regularizer_l2=0,
+                 bias_regularizer_l1=0, bias_regularizer_l2=0):
         self.weights = 0.10 * np.random.randn(n_inputs, n_neurons)
         self.biases = np.zeros((1, n_neurons))
+        self.weight_regularizer_l1 = weight_regularizer_l1
+        self.weight_regularizer_l2 = weight_regularizer_l2
+        self.bias_regularizer_l1 = bias_regularizer_l1
+        self.bias_regularizer_l2 = bias_regularizer_l2
 
     def forward(self, inputs):
         self.inputs = inputs
@@ -19,8 +25,44 @@ class Layer_Dense:
         # Gradients on parameters
         self.dweights = np.dot(self.inputs.T, dvalues)
         self.dbiases = np.sum(dvalues, axis=0, keepdims=True)
+        
+        # Gradients on regularization
+        
+        if self.weight_regularizer_l1 > 0:
+            dL1 = np.ones_like(self.weights)
+            dL1[self.weights > 0 ] = -1
+            self.dweights += self.weight_regularizer_l1*dL1
+
+        if self.weight_regularizer_l2 > 0:
+            self.dweights += self.dweights * 2 * self.weight_regularizer_l2
+
+        if self.bias_regularizer_l1 > 0:
+            dL1 = np.ones_like(self.biases)
+            dL1[self.biases > 0 ] = -1
+            self.dbiases += self.bias_regularizer_l1*dL1
+
+        if self.bias_regularizer_l2 > 0:
+            self.dbiases += self.dbiases * 2 * self.bias_regularizer_l2
+        
+        
+        
+        
         # Gradient on values
         self.dinputs = np.dot(dvalues, self.weights.T)
+
+class Layer_Dropout:
+
+    def __init__(self, rate):
+        self.rate = 1 - rate
+
+    def forward(self, inputs):
+        self.inputs = inputs
+        self.binary_mask = np.random.binomial(1, self.rate, size=inputs.shape) / self.rate
+        self.output = inputs * self.binary_mask
+
+    def backward(self, dvalues):
+        self.dinputs = dvalues * self.binary_mask
+
     
 # ReLU activation
 class Activation_ReLU:
@@ -50,13 +92,41 @@ class Activation_SoftMax:
             jacobian_matrix = np.diagflat(single_output) - np.dot(single_output, single_output.T)
 
             self.dinputs[index] = np.dot(jacobian_matrix, single_dvalues)
-            
+
+class Activation_Sigmoid:
+
+    def forward(self, inputs):
+        self.inputs = inputs
+        self.output = 1 / (1 + np.exp(-inputs))
+    
+    def backward(self, dvalues):
+        self.dinputs = dvalues * self.output * (1 - self.output)
+        
 
 class Loss:
     def calculate(self, output, target):
         sample_losses = self.forward(output, target)
         data_loss = np.mean(sample_losses)
         return data_loss
+    
+    # Regularization loss calculation
+    def regularization_loss(self, layer):
+
+        regularization_loss=0
+
+        if layer.weight_regularizer_l1 > 0:
+            regularization_loss += layer.weight_regularizer_l1 * np.sum(np.abs(layer.weights))
+
+        if layer.weight_regularizer_l2 > 0:
+            regularization_loss += layer.weight_regularizer_l2 * np.sum(layer.weights * layer.weights)
+
+        if layer.bias_regularizer_l1 > 0:
+            regularization_loss += layer.bias_regularizer_l1 * np.sum(np.abs(layer.biases))
+
+        if layer.bias_regularizer_l2 > 0:
+            regularization_loss += layer.bias_regularizer_l2 * np.sum(layer.biases * layer.biases)
+
+        return regularization_loss
 
 class Loss_CategoricalCrossEntropy(Loss):
     def forward(self, y_pred, y_true):
@@ -81,7 +151,32 @@ class Loss_CategoricalCrossEntropy(Loss):
             self.dinputs = -y_true / dvalues
             self.dinputs = self.dinputs / samples
 
-class Activation_Softmax_Loss_CategoricalCrossentropy():
+class Loss_BinaryCrossEntropy(Loss):
+
+    def forward(self, y_pred, y_true):
+        
+        y_pred_clipped = np.clip(y_pred, 1e-7, 1-1e-7)
+
+        sample_losses = -(y_true * np.log(y_pred_clipped) + (1 - y_true) * np.log(1 - y_pred_clipped))
+
+        sample_losses = np.mean(sample_losses, axis=-1)
+
+        return sample_losses
+    
+    def backward(self, dvalues, y_true):
+            
+            samples = len(dvalues)
+    
+            outputs = len(dvalues[0])
+    
+            clipped_dvalues = np.clip(dvalues, 1e-7, 1-1e-7)
+    
+            self.dinputs = -(y_true / clipped_dvalues - (1 - y_true) / (1 - clipped_dvalues)) / outputs
+    
+            self.dinputs = self.dinputs / samples
+
+            
+class Activation_Softmax_Loss_CategoricalCrossentropy(Loss):
     def __init__(self):
         self.activation = Activation_SoftMax()
         self.loss = Loss_CategoricalCrossEntropy()
@@ -108,6 +203,8 @@ class Activation_Softmax_Loss_CategoricalCrossentropy():
         self.dinputs[range(samples), y_true] -= 1
         # Normalize gradient
         self.dinputs = self.dinputs / samples
+
+
 
 class Optimizer_SGD:
 
@@ -287,37 +384,55 @@ class Optimizer_Adam:
     def post_update_params(self):
         self.iterations += 1
 
-X, y = spiral_data(samples=100, classes=3)
 
-dense1= Layer_Dense(2, 64)
+X, y = spiral_data(samples=100, classes=2)
+
+y = y.reshape(-1, 1)
+print(y)
+dense1= Layer_Dense(2, 64, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4)
 activation1= Activation_ReLU()
+dense2= Layer_Dense(64, 1)
 
-dense2= Layer_Dense(64, 3)
+activation2= Activation_Sigmoid()
 
-loss_activation = Activation_Softmax_Loss_CategoricalCrossentropy()
+loss_function = Loss_BinaryCrossEntropy()
 
-optimizer = Optimizer_RMSprop(learning_rate=0.02,decay=1e-5)
+optimizer = Optimizer_Adam(decay=5e-7)
 
 for epoch in range(10001):
     
     # Forward pass
     dense1.forward(X)
+    
     activation1.forward(dense1.output)
-    #print(activation1.output)
+    
     dense2.forward(activation1.output)
-    #print(activation2.output)
 
+    activation2.forward(dense2.output)
+    #print(activation2.output)
     #Loss
-    loss = loss_activation.forward(dense2.output, y)
-    #print("Loss:", loss)
+    data_loss = loss_function.calculate(activation2.output, y)
+    
+    regularization_loss = loss_function.regularization_loss(dense1) + loss_function.regularization_loss(dense2)
+
+    loss = data_loss + regularization_loss
     #Accuracy
-    predictions_class = np.argmax(loss_activation.output, axis=1)
+    predictions_class = (activation2.output > 0.5) * 1
     accuracy = np.mean(predictions_class == y)
     #print("Accuracy:", accuracy)
 
+    if epoch % 100 == 0:
+        print(f'epoch: {epoch}, ' +
+                f'acc: {accuracy:.3f}, ' +
+                f'loss: {loss:.3f}, (' +
+                f'data_loss: {data_loss:.3f}, ' +
+                f'reg_loss: {regularization_loss:.3f},) '+
+                f'lr: {optimizer.current_learning_rate}')
+        
     # Backward pass
-    loss_activation.backward(loss_activation.output, y)
-    dense2.backward(loss_activation.dinputs)
+    loss_function.backward(activation2.output, y)
+    activation2.backward(loss_function.dinputs)
+    dense2.backward(activation2.dinputs)
     activation1.backward(dense2.dinputs)
     dense1.backward(activation1.dinputs)
 
@@ -327,23 +442,20 @@ for epoch in range(10001):
     optimizer.update_params(dense2)
     optimizer.post_update_params()
 
-    if epoch % 100 == 0:
-        print(f'epoch: {epoch}, ' +
-                f'acc: {accuracy:.3f}, ' +
-                f'loss: {loss:.3f}, ' +
-                f'lr: {optimizer.current_learning_rate}')
 
 # Model validation
-X_test, y_test = spiral_data(samples=100, classes=3)
+X_test, y_test = spiral_data(samples=100, classes=2)
+
+y_test = y_test.reshape(-1, 1)
 
 dense1.forward(X_test)
 activation1.forward(dense1.output)
 dense2.forward(activation1.output)
-loss = loss_activation.forward(dense2.output, y_test)
+activation2.forward(dense2.output)
 
-predictions = np.argmax(loss_activation.output, axis=1)
-if len(y_test.shape) == 2:
-    y_test = np.argmax(y_test, axis=1)
+loss = loss_function.calculate(activation2.output, y_test)
+
+predictions = (activation2.output > 0.5) * 1
 accuracy = np.mean(predictions == y_test)
 
 print(f"validation, acc: {accuracy:.3f}, loss: {loss:.3f}")

@@ -255,7 +255,7 @@ class Optimizer_Adam:
         # If layer does not have cache arrays,
         # create a them filled with zeros
         if not hasattr(layer, 'weight_cache'):
-            layer.weight_momentum = np.zeros_like(layer.weights)
+            layer.weight_momentums = np.zeros_like(layer.weights)
             layer.weight_cache = np.zeros_like(layer.weights)
             layer.bias_momentums= np.zeros_like(layer.biases)
             layer.bias_cache= np.zeros_like(layer.biases)
@@ -267,21 +267,21 @@ class Optimizer_Adam:
         # Get corrected momentum
         # self.iteration is 0 at first pass
         # and we make it start at 1 here
-        weight_momentums_corrected = layer.weight_momentums / (1 - self.beta_1) ** (self.iterations + 1)
-        bias_momentums_corrected = layer.bias_momentums / (1 - self.beta_1) ** (self.iterations + 1)
+        weight_momentums_corrected = layer.weight_momentums / (1 - self.beta_1 ** (self.iterations + 1))
+        bias_momentums_corrected = layer.bias_momentums / (1 - self.beta_1 ** (self.iterations + 1))
 
         # Update the cache with squared curenrt gradients
-        layer.weights_cache = self.beta_2 * layer.weight_cache + (1 - self.beta_2) * layer.dweights**2
+        layer.weight_cache = self.beta_2 * layer.weight_cache + (1 - self.beta_2) * layer.dweights**2
         layer.bias_cache = self.beta_2 * layer.bias_cache + (1 - self.beta_2) * layer.dbiases**2
  
         # Get corrected cache
-        weights_cache_corrected = layer.weights_cache / (1 - self.beta_2) ** (self.iterations + 1)
-        biases_cache_corrected = layer.bias_cache / (1 - self.beta_2) ** (self.iterations + 1)
+        weights_cache_corrected = layer.weight_cache / (1 - self.beta_2 ** (self.iterations + 1))
+        biases_cache_corrected = layer.bias_cache / (1 - self.beta_2 ** (self.iterations + 1))
 
         # Vanilla SGD parameter update + normalization
         # with square rooted cache
-        layer.weights += -(self.current_learning_rate * weight_momentums_corrected) / (np.sqrt(weights_cache_corrected) + self.epsilon)
-        layer.biases += -(self.current_learning_rate * bias_momentums_corrected) / (np.sqrt(biases_cache_corrected) + self.epsilon)
+        layer.weights += -self.current_learning_rate * weight_momentums_corrected / (np.sqrt(weights_cache_corrected) + self.epsilon)
+        layer.biases += -self.current_learning_rate * bias_momentums_corrected / (np.sqrt(biases_cache_corrected) + self.epsilon)
 
     # Call after any parameter update
     def post_update_params(self):
