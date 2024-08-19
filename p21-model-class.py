@@ -481,7 +481,7 @@ class Model:
         for layer in reversed(self.layers):
             layer.backward(layer.next.dinputs)
 
-    def train(self, X, y, *, epochs=1, print_every=1):
+    def train(self, X, y, *, epochs=1, print_every=1, validation_data=None):
 
         self.accuracy.init(y)
 
@@ -511,6 +511,23 @@ class Model:
                         f'data_loss: {data_loss:.3f}, ' +
                         f'reg_loss: {regularization_loss:.3f}), ' +
                         f'lr: {self.optimizer.current_learning_rate}')
+        
+        if validation_data is not None:
+
+            X_val, y_val = validation_data            
+
+            output = self.fowward(X_val, training=False)
+
+
+            loss = self.loss.calculate(output, y_val)
+
+            predictions = self.output_layer_activation.predictions(output)
+
+            accuracy = self.accuracy.calculate(predictions, y_val)
+
+            print(f'validation, ' +
+                  f'acc: {accuracy:.3f},' +
+                  f'loss: {loss:.3f}')
 
     
     def finalize(self):
